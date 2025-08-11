@@ -7,8 +7,11 @@ if Config.UseQBCoreNotifyIfPresent then
 end
 
 -- Cache for installed neon sides per-vehicle
--- Using weak keys so cache doesn’t grow forever if entities despawn
+-- Weak keys so entries drop when entities despawn
 local neonCache = setmetatable({}, { __mode = 'k' })
+
+-- Track last driver vehicle to prime cache immediately on seat change
+local lastDriverVeh = nil
 
 -- ===== Utilities =====
 local function notify(msg, typ)
@@ -39,12 +42,9 @@ local function setNeon(vehicle, index, toggle)
     SetVehicleNeonLightEnabled(vehicle, index, toggle)
 end
 
-local function refreshInstalledNeons()
-    local veh, err = getPlayerVehicleIfDriver()
-    if not veh then return end
-
+-- Read installed sides from props
+local function readInstalledFromProps(veh)
     local installed = { [0]=false, [1]=false, [2]=false, [3]=false }
-
     if QBCore and QBCore.Functions and QBCore.Functions.GetVehicleProperties then
         local ok, props = pcall(QBCore.Functions.GetVehicleProperties, veh)
         if ok and props then
@@ -57,34 +57,45 @@ local function refreshInstalledNeons()
             end
         end
     end
-
-    -- Save in cache & statebag
-    neonCache[veh] = installed
-    local state = Entity(veh).state
-    if state then state:set('sb_neon_installed', installed, true) end
+    return installed
 end
 
--- Updated getInstalledNeonSides to use our cache first
+-- Merge strategy: once true, keep true (don’t “forget” installs due to toggling off)
+local function mergeStickyInstalled(old, new)
+    if not old then return new end
+    local out = { [0]=false, [1]=false, [2]=false, [3]=false }
+    for i=0,3 do
+        out[i] = (old[i] or new[i]) and true or false
+    end
+    return out
+end
+
+-- Save installed sides into cache + statebag
+local function setInstalled(veh, installed, makePublic)
+    neonCache[veh] = installed
+    local state = Entity(veh).state
+    if state then state:set('sb_neon_installed', installed, makePublic == true) end
+end
+
+-- Refresh from props, but keep sticky-true behavior
+local function refreshInstalledNeons()
+    local veh = getPlayerVehicleIfDriver()
+    if not veh then return end
+    local propsInstalled = readInstalledFromProps(veh)
+    local merged = mergeStickyInstalled(neonCache[veh], propsInstalled)
+    setInstalled(veh, merged, true)
+end
+
+-- Get installed sides preferring cache, then props once
 local function getInstalledNeonSides(vehicle)
     if neonCache[vehicle] then
         return neonCache[vehicle]
     end
-    refreshInstalledNeons()
+    -- Prime from props (first read for this vehicle)
+    local propsInstalled = readInstalledFromProps(vehicle)
+    setInstalled(vehicle, propsInstalled, true)
     return neonCache[vehicle] or { [0]=false, [1]=false, [2]=false, [3]=false }
 end
-
--- Auto-refresh every 30 seconds for the player's vehicle
-CreateThread(function()
-    while true do
-        Wait(30000) -- 30 seconds
-        refreshInstalledNeons()
-    end
-end)
-
--- Manual event trigger if you ever want to force-refresh from other scripts
-RegisterNetEvent('sb_neontoggle:refresh', function()
-    refreshInstalledNeons()
-end)
 
 local function anyInstalled(installed)
     for i=0,3 do if installed[i] then return true end end
@@ -112,7 +123,6 @@ local function toggleNeonAllInstalled()
 
     local anyOn = anyInstalledNeonCurrentlyOn(veh, installed)
     if anyOn then
-        -- Turn OFF any installed sides that are currently on
         local turned = 0
         for i=0,3 do
             if installed[i] and isNeonOn(veh, i) then
@@ -122,12 +132,10 @@ local function toggleNeonAllInstalled()
         end
         notify(('Underglow OFF (%d sides).'):format(turned))
     else
-        -- Turn ON all installed sides
         local turned = 0
         for i=0,3 do
             if installed[i] then
                 setNeon(veh, i, true)
-                turnedOn = true
                 turned = turned + 1
             end
         end
@@ -151,7 +159,7 @@ end
 
 -- ===== Commands & Keybinds =====
 RegisterCommand('+neonToggleAll', function() toggleNeonAllInstalled() end, false)
-RegisterCommand('-neonToggleAll', function() end, false) -- keyup noop
+RegisterCommand('-neonToggleAll', function() end, false)
 
 -- Use configured default key if present, else fallback to 'U'
 local defaultKey = (Config and Config.DefaultKey) or 'U'
@@ -166,3 +174,52 @@ RegisterCommand('neon_right', function() toggleNeonSideInstalled(1, 'Right') end
 -- Optional chat aliases
 RegisterCommand('neon', toggleNeonAllInstalled, false)
 RegisterCommand('neon_all', toggleNeonAllInstalled, false)
+
+-- ===== Refresh mechanics =====
+
+-- Auto-refresh every 5 seconds (sticky merge)
+CreateThread(function()
+    while true do
+        Wait(5000)
+        refreshInstalledNeons()
+    end
+end)
+
+-- Immediate refresh when you enter the driver seat
+CreateThread(function()
+    while true do
+        Wait(500)
+        local ped = PlayerPedId()
+        local veh = GetVehiclePedIsIn(ped, false)
+        if veh ~= 0 and GetPedInVehicleSeat(veh, -1) == ped then
+            if veh ~= lastDriverVeh then
+                lastDriverVeh = veh
+                -- Prime from props right away
+                local merged = mergeStickyInstalled(nil, readInstalledFromProps(veh))
+                setInstalled(veh, merged, true)
+            end
+        else
+            lastDriverVeh = nil
+        end
+    end
+end)
+
+-- Manual event (soft refresh, sticky merge)
+RegisterNetEvent('sb_neontoggle:refresh', function()
+    refreshInstalledNeons()
+end)
+
+-- Hard reset event (a dealership/mod-shop should call this after purchase/clear)
+-- payload: { left=true/false, right=true/false, front=true/false, back=true/false }
+RegisterNetEvent('sb_neontoggle:refreshInstall', function(payload)
+    local veh = getPlayerVehicleIfDriver()
+    if not veh then return end
+    if type(payload) ~= 'table' then return end
+    local installed = {
+        [0] = not not payload.left,
+        [1] = not not payload.right,
+        [2] = not not payload.front,
+        [3] = not not payload.back,
+    }
+    setInstalled(veh, installed, true)
+end)

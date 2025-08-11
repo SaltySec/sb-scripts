@@ -177,14 +177,6 @@ RegisterCommand('neon_all', toggleNeonAllInstalled, false)
 
 -- ===== Refresh mechanics =====
 
--- Auto-refresh every 5 seconds (sticky merge)
-CreateThread(function()
-    while true do
-        Wait(5000)
-        refreshInstalledNeons()
-    end
-end)
-
 -- Immediate refresh when you enter the driver seat
 CreateThread(function()
     while true do

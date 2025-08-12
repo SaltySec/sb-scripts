@@ -35,5 +35,11 @@ Config.RandomMessages = {
     "Something in the air feels... different..."
 }
 
+-- ==== Time Sync with RealWeather Off Settings ====
+-- Default GTA is ~1 game minute per 2 real seconds (2000 ms).
+Config.ManualMsPerGameMinute = 2000
+-- How often the server tells all clients “the current manual time”.
+Config.ManualBroadcastInterval = 2000  -- ms (2s is plenty to keep clients in lockstep)
+
 -- ==== Debug ====
 Config.Debug = false

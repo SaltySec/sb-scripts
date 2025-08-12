@@ -113,6 +113,13 @@ RegisterNetEvent("realtimeclock:setRealtime", function(enable, hour, minute)
     end
 end)
 
+-- Server-driven tick for manual mode (realtime=OFF). No fades, no messages.
+RegisterNetEvent("realtimeclock:forceTime", function(hour, minute, second)
+    if not realtimeMode then
+        NetworkOverrideClockTime(hour, minute, second or 0)
+    end
+end)
+
 -- Manual time set handler
 RegisterNetEvent("realtimeclock:updateTime", function(hour, minute)
     realtimeMode, realtimeThread = false, nil

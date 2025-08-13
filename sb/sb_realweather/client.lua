@@ -2,7 +2,13 @@
 local weatherInfo = { temp = 0, desc = "Loading...", gta = "CLEAR", unit = "C" }
 local manualWeather = nil -- Stores the weather type if manual override is active
 local transitionTime = Config.TransitionTime -- Time in milliseconds for weather transitions (from config.lua)
+-- The 'currentActiveWeather' variable is kept for logging purposes.
 local currentActiveWeather = nil -- Tracks the weather type currently active in the game
+
+-- Helper function to send logs to the server terminal
+local function logToServer(logType, weatherType, transitionTimeUsed, isManual, previousWeather)
+    TriggerServerEvent('rw:clientLog', logType, weatherType, transitionTimeUsed, isManual, previousWeather)
+end
 
 -- Event handler for updating real weather information (temperature, description)
 -- This data is received from the server and used for display purposes if needed.
@@ -16,18 +22,16 @@ RegisterNetEvent('rw:setWeather')
 AddEventHandler('rw:setWeather', function(weatherType)
     -- Only proceed if manual weather is not active, allowing real weather to apply
     if not manualWeather then
-        -- Check if the requested weatherType is different from the currently active one
-        -- This is crucial for smooth transitions. If we constantly try to set the same
-        -- weather, it can interrupt or reset the native's transition logic.
-        if currentActiveWeather ~= weatherType then
-            -- Set the weather type with a smooth transition over the defined time
-            SetWeatherTypeOvertimePersist(weatherType, transitionTime)
-            -- Update the locally tracked active weather
-            currentActiveWeather = weatherType
-            print(('[RealWeather-Client] Changing weather to: %s with transition over %s ms'):format(weatherType, transitionTime))
+        local prevWeather = currentActiveWeather -- Store previous weather for logging
+        -- Always apply the full transition time, regardless of whether the weather type is new or same.
+        SetWeatherTypeOvertimePersist(weatherType, transitionTime)
+        currentActiveWeather = weatherType -- Update current active weather
+
+        -- Log that a weather update (and thus a transition) was applied
+        if prevWeather ~= weatherType then
+            logToServer('change', weatherType, transitionTime, false, prevWeather) -- Automatic weather change
         else
-            -- Log if the weather type is already active, indicating no change is needed
-            print(('[RealWeather-Client] Weather is already %s, no transition needed.'):format(weatherType))
+            logToServer('refresh', weatherType, transitionTime, false, prevWeather) -- Automatic weather refresh (same type)
         end
     end
 end)
@@ -36,17 +40,18 @@ end)
 -- When manual weather is enabled, real-world weather updates are paused.
 RegisterNetEvent('rw:enableManualWeather')
 AddEventHandler('rw:enableManualWeather', function(weatherType)
-    -- Set the manual weather type
-    manualWeather = weatherType
-    -- Apply the manual weather type with a transition, but only if it's different
-    -- from the current active weather to ensure smooth transitions and prevent snapping.
-    if currentActiveWeather ~= weatherType then
-        SetWeatherTypeOvertimePersist(weatherType, transitionTime)
-        currentActiveWeather = weatherType
-        print(('[RealWeather-Client] Manual weather enabled: %s with transition over %s ms'):format(weatherType, transitionTime))
+    manualWeather = weatherType -- Set the manual weather type
+    local prevWeather = currentActiveWeather -- Store previous weather for logging
+
+    -- Always apply the full transition time for manual weather, regardless of type.
+    SetWeatherTypeOvertimePersist(weatherType, transitionTime)
+    currentActiveWeather = weatherType -- Update current active weather
+
+    -- Log that a manual weather update (and thus a transition) was applied
+    if prevWeather ~= weatherType then
+        logToServer('change', weatherType, transitionTime, true, prevWeather) -- Manual weather change
     else
-        -- Log if the manual weather type is already active, indicating no change is needed
-        print(('[RealWeather-Client] Manual weather is already %s, no transition needed.'):format(weatherType))
+        logToServer('refresh', weatherType, transitionTime, true, prevWeather) -- Manual weather refresh (same type)
     end
 end)
 
@@ -55,10 +60,9 @@ end)
 RegisterNetEvent('rw:disableManualWeather')
 AddEventHandler('rw:disableManualWeather', function()
     manualWeather = nil -- Clear the manual weather override
-    print('[RealWeather-Client] Manual weather disabled. Real weather sync will resume.')
+    logToServer('manual_disabled') -- Send this log to the server terminal
     -- When manual weather is disabled, the next real weather update (from server-side loop)
-    -- will automatically apply the current real weather, which will then trigger a transition
-    -- if it's different from the last manually set weather.
+    -- will automatically apply the current real weather, ensuring a transition.
 end)
 
 -- Optional: Initial weather setup on resource start for the client

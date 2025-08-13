@@ -124,7 +124,9 @@ end
 
     if validWeathers[sub] then
         isRealWeatherEnabled = false
-        TriggerClientEvent("rw:setWeather", -1, sub)
+        -- For /weather command, we now call enableManualWeather directly on the client.
+        -- This ensures the manual override state is set before the weather change.
+        TriggerClientEvent("rw:enableManualWeather", -1, sub)
         notifyPlayer(src, "Weather changed to: " .. string.upper(sub), "success")
     else
         notifyPlayer(src, "Invalid weather type. Use /weather help to list options.", "error")
@@ -202,6 +204,8 @@ end
                 local temperature = data.main.temp
                 local gtaWeather = mapOpenWeatherToFiveM(data.weather[1].main, weatherDesc)
 
+                -- Instead of directly setting weather here, we now trigger the client's rw:setWeather
+                -- which will handle the transition logic (always smooth in the new client).
                 TriggerClientEvent('rw:setWeather', -1, gtaWeather)
                 TriggerClientEvent('rw:updateWeatherInfo', -1, {
                     temp = temperature,
@@ -240,5 +244,30 @@ AddEventHandler('onResourceStart', function(resource)
         TriggerClientEvent('chat:addSuggestion', -1, '/weather', 'Manually set the in-game weather.', {
             { name = "Weather Type", help = "do help here to see valid weather types" },
         })
+    end
+end)
+
+-- Server-side event to receive client logs and print them to the server terminal
+-- This event is triggered from the client using TriggerServerEvent('rw:clientLog', ...)
+RegisterNetEvent('rw:clientLog')
+AddEventHandler('rw:clientLog', function(logType, weatherType, transitionTimeUsed, isManual, previousWeather)
+    local src = source -- Get the source player ID. 0 means it's coming from the server itself.
+    local prefix = "[RealWeather-Client Log]"
+    if src ~= 0 then -- If the source is a player, include their ID in the log.
+        prefix = prefix .. " [Player " .. src .. "]"
+    end
+
+    -- Process different types of log messages received from the client
+    if logType == 'change' then
+        -- Log a message when the weather type is genuinely changing
+        local typeIndicator = isManual and "Manual" or "Automatic"
+        print(('%s %s Changing weather from %s to %s with transition over %s ms'):format(prefix, typeIndicator, previousWeather or 'N/A', weatherType, transitionTimeUsed))
+    -- elseif logType == 'refresh' then
+        -- Log a message when the same weather type is being re-applied (refreshed)
+        -- local typeIndicator = isManual and "Manual" or "Automatic"
+        -- print(('%s %s Refreshing weather %s with transition over %s ms'):format(prefix, typeIndicator, weatherType, transitionTimeUsed))
+    elseif logType == 'manual_disabled' then
+        -- Log a message when manual weather override is disabled
+        print(('%s Manual weather disabled. Real weather sync will resume.'):format(prefix))
     end
 end)

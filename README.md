@@ -15,3 +15,7 @@
 *sb_scbatoggle* - Gives configurable keybind to remove SCBA mask. Can configure mask, and animations in config. Will remove helmet> remove mask > put helmet on. Same for installing mask. 
 
 *sb_teleport* configurable teleport areas. Initially built for using the "elevator" at pillbox for LAFD to get up to and down from Helipad on roof. 
+
+*sb_drugs* drug script that includes percocet and vicoden items. You can configure the high ammounts, overdose ammounts, overdose time etc. in config. Includes narcan item that will stop the effects of high and overdose. 
+
+*sb_customshop* advanced configuration file for adding in custom shops. Can lock to job, and change shops inventory in cfg. Current set with osp-ambulance related items for Hood Doctor to use.

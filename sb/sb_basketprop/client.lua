@@ -60,7 +60,10 @@ CreateThread(function()
             label = 'Put Nearest Person In Basket',
             groups = { 'fire', 'police' },
             canInteract = function(entity)
-                return GetEntityModel(entity) == basketModel and not isBasketOccupied(entity)
+                return DoesEntityExist(entity)
+                    and pcall(GetEntityModel, entity)
+                    and GetEntityModel(entity) == basketModel
+                    and not isBasketOccupied(entity)
             end,
             onSelect = function(data)
                 local netId = NetworkGetNetworkIdFromEntity(data.entity)
@@ -73,7 +76,10 @@ CreateThread(function()
             label = 'Get Into Basket',
             groups = { 'fire', 'police' },
             canInteract = function(entity)
-                return GetEntityModel(entity) == basketModel and not isBasketOccupied(entity)
+                return DoesEntityExist(entity)
+                    and pcall(GetEntityModel, entity)
+                    and GetEntityModel(entity) == basketModel
+                    and not isBasketOccupied(entity)
             end,
             onSelect = function(data)
                 local netId = NetworkGetNetworkIdFromEntity(data.entity)
@@ -86,7 +92,10 @@ CreateThread(function()
             label = 'Remove Person From Basket',
             groups = { 'fire', 'police' },
             canInteract = function(entity)
-                return GetEntityModel(entity) == basketModel and isBasketOccupied(entity)
+                return DoesEntityExist(entity)
+                    and pcall(GetEntityModel, entity)
+                    and GetEntityModel(entity) == basketModel
+                    and isBasketOccupied(entity)
             end,
             onSelect = function(data)
                 local netId = NetworkGetNetworkIdFromEntity(data.entity)
@@ -99,7 +108,10 @@ CreateThread(function()
             label = 'Get Out of Basket',
             groups = { 'fire', 'police' },
             canInteract = function(entity)
-                return GetEntityModel(entity) == basketModel and IsEntityAttachedToEntity(PlayerPedId(), entity)
+                return DoesEntityExist(entity)
+                    and pcall(GetEntityModel, entity)
+                    and GetEntityModel(entity) == basketModel
+                    and IsEntityAttachedToEntity(PlayerPedId(), entity)
             end,
             onSelect = function(data)
                 local netId = NetworkGetNetworkIdFromEntity(data.entity)
@@ -107,7 +119,7 @@ CreateThread(function()
             end
         }
     })
-    print("✅ ox_target: global basket interactions with occupancy logic loaded.")
+    print("✅ ox_target: global basket interactions with safe model checks loaded.")
 end)
 
 RegisterNetEvent("rescuebasket:client:attachToBasket", function(basketNetId)

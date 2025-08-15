@@ -3,10 +3,16 @@ game 'gta5'
 
 name 'sb_neontoggle'
 author 'you'
-description 'Toggle vehicle underglow (neon) per equipped sides, with keybind'
-version '1.0.0'
+version '2.0.0'
+description 'Toggle vehicle underglow (installed sides only) with oxmysql persistence by plate'
+
+shared_script 'config.lua'
 
 client_scripts {
-    'config.lua',
     'client.lua'
+}
+
+server_scripts {
+    '@oxmysql/lib/MySQL.lua',
+    'server.lua'
 }

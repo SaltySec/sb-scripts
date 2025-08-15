@@ -1,4 +1,4 @@
--- client.lua
+-- client.lua (plate-keyed cache)
 local QBCore = nil
 if Config.UseQBCoreNotifyIfPresent then
     pcall(function()
@@ -6,17 +6,14 @@ if Config.UseQBCoreNotifyIfPresent then
     end)
 end
 
--- Cache for installed neon sides per-vehicle
--- Weak keys so entries drop when entities despawn
-local neonCache = setmetatable({}, { __mode = 'k' })
-
--- Track last driver vehicle to prime cache immediately on seat change
-local lastDriverVeh = nil
+-- Cache now keyed by PLATE string, not vehicle handle.
+local neonCache = {}            -- [plate] = { [0]=L, [1]=R, [2]=F, [3]=B }
+local lastDriverVeh, lastPlate = nil, nil
 
 -- ===== Utilities =====
 local function notify(msg, typ)
     if QBCore and QBCore.Functions and QBCore.Functions.Notify then
-        QBCore.Functions.Notify(msg, typ or 'primary', 3500)
+        QBCore.Functions.Notify(msg, typ or 'primary', 3000)
     else
         TriggerEvent('chat:addMessage', { args = { '^3Neon', msg } })
     end
@@ -33,16 +30,23 @@ local function getPlayerVehicleIfDriver()
     return veh
 end
 
+local function getPlate(veh)
+    if veh == 0 then return nil end
+    local plate = GetVehicleNumberPlateText(veh)
+    if not plate or plate == '' then return nil end
+    plate = plate:gsub('^%s*(.-)%s*$', '%1'):upper()
+    return plate
+end
+
 -- indices: 0=Left, 1=Right, 2=Front, 3=Back
 local function isNeonOn(vehicle, index)
     return IsVehicleNeonLightEnabled(vehicle, index)
 end
-
 local function setNeon(vehicle, index, toggle)
     SetVehicleNeonLightEnabled(vehicle, index, toggle)
 end
 
--- Read installed sides from props
+-- Bootstrap sources
 local function readInstalledFromProps(veh)
     local installed = { [0]=false, [1]=false, [2]=false, [3]=false }
     if QBCore and QBCore.Functions and QBCore.Functions.GetVehicleProperties then
@@ -50,51 +54,46 @@ local function readInstalledFromProps(veh)
         if ok and props then
             local ne = props.neonEnabled
             if type(ne) == 'table' then
-                installed[0] = not not ne[1]   -- Left
-                installed[1] = not not ne[2]   -- Right
-                installed[2] = not not ne[3]   -- Front
-                installed[3] = not not ne[4]   -- Back
+                installed[0] = not not ne[1]
+                installed[1] = not not ne[2]
+                installed[2] = not not ne[3]
+                installed[3] = not not ne[4]
             end
         end
     end
     return installed
 end
 
--- Merge strategy: once true, keep true (don’t “forget” installs due to toggling off)
-local function mergeStickyInstalled(old, new)
-    if not old then return new end
+local function readInstalledFromNatives(veh)
+    return {
+        [0] = IsVehicleNeonLightEnabled(veh, 0),
+        [1] = IsVehicleNeonLightEnabled(veh, 1),
+        [2] = IsVehicleNeonLightEnabled(veh, 2),
+        [3] = IsVehicleNeonLightEnabled(veh, 3),
+    }
+end
+
+local function orSides(a, b)
     local out = { [0]=false, [1]=false, [2]=false, [3]=false }
-    for i=0,3 do
-        out[i] = (old[i] or new[i]) and true or false
-    end
+    if type(a) == 'table' then for i=0,3 do out[i] = out[i] or (a[i] == true) end end
+    if type(b) == 'table' then for i=0,3 do out[i] = out[i] or (b[i] == true) end end
     return out
 end
 
--- Save installed sides into cache + statebag
-local function setInstalled(veh, installed, makePublic)
-    neonCache[veh] = installed
-    local state = Entity(veh).state
-    if state then state:set('sb_neon_installed', installed, makePublic == true) end
-end
-
--- Refresh from props, but keep sticky-true behavior
-local function refreshInstalledNeons()
-    local veh = getPlayerVehicleIfDriver()
-    if not veh then return end
-    local propsInstalled = readInstalledFromProps(veh)
-    local merged = mergeStickyInstalled(neonCache[veh], propsInstalled)
-    setInstalled(veh, merged, true)
-end
-
--- Get installed sides preferring cache, then props once
-local function getInstalledNeonSides(vehicle)
-    if neonCache[vehicle] then
-        return neonCache[vehicle]
+-- Plate-keyed cache helpers
+local function setInstalled(plate, sides)
+    if not plate then return end
+    neonCache[plate] = sides
+    -- also expose on the entity state for other scripts, if you want:
+    local veh = lastDriverVeh
+    if veh and getPlate(veh) == plate then
+        local state = Entity(veh).state
+        if state then state:set('sb_neon_installed', sides, true) end
     end
-    -- Prime from props (first read for this vehicle)
-    local propsInstalled = readInstalledFromProps(vehicle)
-    setInstalled(vehicle, propsInstalled, true)
-    return neonCache[vehicle] or { [0]=false, [1]=false, [2]=false, [3]=false }
+end
+
+local function getInstalledNeonSides(plate)
+    return (plate and neonCache[plate]) or { [0]=false, [1]=false, [2]=false, [3]=false }
 end
 
 local function anyInstalled(installed)
@@ -111,14 +110,67 @@ local function anyInstalledNeonCurrentlyOn(vehicle, installed)
     return false
 end
 
--- ===== Toggling logic (installed-only) =====
+-- ===== Seat entry: seed cache immediately, then ask server
+CreateThread(function()
+    while true do
+        Wait(500)
+        local ped = PlayerPedId()
+        local veh = GetVehiclePedIsIn(ped, false)
+        if veh ~= 0 and GetPedInVehicleSeat(veh, -1) == ped then
+            if veh ~= lastDriverVeh then
+                lastDriverVeh = veh
+                local plate = getPlate(veh)
+                lastPlate = plate
+                if plate then
+                    local bootstrap = orSides(readInstalledFromProps(veh), readInstalledFromNatives(veh))
+                    setInstalled(plate, bootstrap)  -- works instantly
+                    TriggerServerEvent('sb_neontoggle:requestInstall', plate, bootstrap) -- canonical
+                end
+            end
+        else
+            lastDriverVeh, lastPlate = nil, nil
+        end
+    end
+end)
+
+-- Server returns canonical record
+RegisterNetEvent('sb_neontoggle:setInstall', function(plate, sides)
+    if not plate or plate ~= (lastPlate or '') then return end
+    setInstalled(plate, {
+        [0] = not not sides[0],
+        [1] = not not sides[1],
+        [2] = not not sides[2],
+        [3] = not not sides[3],
+    })
+end)
+
+-- External hook to set installs (also persists via server)
+RegisterNetEvent('sb_neontoggle:refreshInstall', function(payload)
+    local veh = getPlayerVehicleIfDriver()
+    if not veh or type(payload) ~= 'table' then return end
+    local plate = getPlate(veh); if not plate then return end
+    local installed = {
+        [0] = not not payload.left,
+        [1] = not not payload.right,
+        [2] = not not payload.front,
+        [3] = not not payload.back,
+    }
+    setInstalled(plate, installed)
+    TriggerServerEvent('sb_neontoggle:saveInstall', plate, installed)
+end)
+
+-- ===== Toggle logic (installed-only)
 local function toggleNeonAllInstalled()
     local veh, err = getPlayerVehicleIfDriver()
     if not veh then return notify(err or 'You must be in a vehicle.') end
+    local plate = getPlate(veh); if not plate then return notify('Could not read plate.', 'error') end
 
-    local installed = getInstalledNeonSides(veh)
+    local installed = getInstalledNeonSides(plate)
     if not anyInstalled(installed) then
-        return notify('This vehicle has no underglow installed.', 'error')
+        -- tiny debug to help you verify state
+        notify(('No underglow installed. (dbg L=%s R=%s F=%s B=%s)')
+            :format(tostring(installed[0]), tostring(installed[1]), tostring(installed[2]), tostring(installed[3])), 'error')
+        return
     end
 
     local anyOn = anyInstalledNeonCurrentlyOn(veh, installed)
@@ -126,18 +178,14 @@ local function toggleNeonAllInstalled()
         local turned = 0
         for i=0,3 do
             if installed[i] and isNeonOn(veh, i) then
-                setNeon(veh, i, false)
-                turned = turned + 1
+                setNeon(veh, i, false); turned = turned + 1
             end
         end
         notify(('Underglow OFF (%d sides).'):format(turned))
     else
         local turned = 0
         for i=0,3 do
-            if installed[i] then
-                setNeon(veh, i, true)
-                turned = turned + 1
-            end
+            if installed[i] then setNeon(veh, i, true); turned = turned + 1 end
         end
         notify(('Underglow ON (%d sides).'):format(turned))
     end
@@ -146,8 +194,9 @@ end
 local function toggleNeonSideInstalled(sideIndex, label)
     local veh, err = getPlayerVehicleIfDriver()
     if not veh then return notify(err or 'You must be in a vehicle.') end
+    local plate = getPlate(veh); if not plate then return notify('Could not read plate.', 'error') end
 
-    local installed = getInstalledNeonSides(veh)
+    local installed = getInstalledNeonSides(plate)
     if not installed[sideIndex] then
         return notify(('This vehicle does not have %s underglow installed.'):format(label), 'error')
     end
@@ -157,61 +206,27 @@ local function toggleNeonSideInstalled(sideIndex, label)
     notify(('Underglow %s: %s'):format(label, (not currentlyOn) and 'ON' or 'OFF'))
 end
 
--- ===== Commands & Keybinds =====
+-- ===== Commands & Keybinds
 RegisterCommand('+neonToggleAll', function() toggleNeonAllInstalled() end, false)
 RegisterCommand('-neonToggleAll', function() end, false)
 
--- Use configured default key if present, else fallback to 'U'
 local defaultKey = (Config and Config.DefaultKey) or 'U'
 RegisterKeyMapping('+neonToggleAll', 'Toggle vehicle underglow (installed sides only)', 'keyboard', defaultKey)
 
--- Per-side commands, installed-aware
 RegisterCommand('neon_front', function() toggleNeonSideInstalled(2, 'Front') end, false)
 RegisterCommand('neon_back',  function() toggleNeonSideInstalled(3, 'Back')  end, false)
 RegisterCommand('neon_left',  function() toggleNeonSideInstalled(0, 'Left')  end, false)
 RegisterCommand('neon_right', function() toggleNeonSideInstalled(1, 'Right') end, false)
 
--- Optional chat aliases
 RegisterCommand('neon', toggleNeonAllInstalled, false)
 RegisterCommand('neon_all', toggleNeonAllInstalled, false)
 
--- ===== Refresh mechanics =====
-
--- Immediate refresh when you enter the driver seat
-CreateThread(function()
-    while true do
-        Wait(500)
-        local ped = PlayerPedId()
-        local veh = GetVehiclePedIsIn(ped, false)
-        if veh ~= 0 and GetPedInVehicleSeat(veh, -1) == ped then
-            if veh ~= lastDriverVeh then
-                lastDriverVeh = veh
-                -- Prime from props right away
-                local merged = mergeStickyInstalled(nil, readInstalledFromProps(veh))
-                setInstalled(veh, merged, true)
-            end
-        else
-            lastDriverVeh = nil
-        end
-    end
-end)
-
--- Manual event (soft refresh, sticky merge)
-RegisterNetEvent('sb_neontoggle:refresh', function()
-    refreshInstalledNeons()
-end)
-
--- Hard reset event (a dealership/mod-shop should call this after purchase/clear)
--- payload: { left=true/false, right=true/false, front=true/false, back=true/false }
-RegisterNetEvent('sb_neontoggle:refreshInstall', function(payload)
-    local veh = getPlayerVehicleIfDriver()
-    if not veh then return end
-    if type(payload) ~= 'table' then return end
-    local installed = {
-        [0] = not not payload.left,
-        [1] = not not payload.right,
-        [2] = not not payload.front,
-        [3] = not not payload.back,
-    }
-    setInstalled(veh, installed, true)
-end)
+-- Manual seed (uses plate helper)
+RegisterCommand('neon_seed', function()
+    local veh = GetVehiclePedIsIn(PlayerPedId(), false); if veh == 0 then return end
+    local plate = getPlate(veh); if not plate then return end
+    local bootstrap = readInstalledFromNatives(veh)
+    setInstalled(plate, bootstrap) -- keep local in sync
+    TriggerServerEvent('sb_neontoggle:saveInstall', plate, bootstrap)
+    print('[sb_neon] neon_seed sent', plate, bootstrap[0], bootstrap[1], bootstrap[2], bootstrap[3])
+end, false)

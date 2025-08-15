@@ -1,18 +1,15 @@
-Config = {}
+Config = Config or {}
 
--- Default keybind for toggling all equipped neon sides.
--- Players can change this in GTA V key bindings: Settings → Key Bindings → FiveM
-Config.DefaultKey = 'U'   -- change if you want
 
--- If no neon is currently ON and you press the toggle, we need to know what to turn ON.
--- This is your fallback “equipped” profile. Set true/false per side.
--- Order: [0]=Left, [1]=Right, [2]=Front, [3]=Back
-Config.DefaultSidesOn = {
-    [0] = true,  -- Left
-    [1] = true,  -- Right
-    [2] = true,  -- Front
-    [3] = true,  -- Back
-}
+-- Toggle debug logging for sb_neontoggle
+Config.Debug = false
 
--- Use QBCore notify when available, else fallback to chat message.
+-- Default keybind to toggle ALL installed sides
+Config.DefaultKey = 'U'
+
+-- If true and QBCore is running, use QBCore.Functions.Notify; otherwise chat message
 Config.UseQBCoreNotifyIfPresent = true
+
+-- Optional: enable an admin command to set/clear installs by plate
+Config.EnableAdminCommands = true         -- /neon_set and /neon_clear
+Config.AdminAce = 'command.neonadmin'     -- give_ace group.admin command.neonadmin allow

@@ -13,7 +13,7 @@ if Config.FadeOutPercent == nil then Config.FadeOutPercent = 0.75 end
 if Config.DelayUntilMessage == nil then Config.DelayUntilMessage = 1500 end
 if Config.RealtimeLoopDelay == nil then Config.RealtimeLoopDelay = 500 end
 if Config.TimelapseStepMS == nil then Config.TimelapseStepMS = 100 end
--- Mirror server so client can interpolate manual mode smoothly:
+-- Mirror server so client can interpolate manual mode smoothly (may be overridden by server packet)
 if Config.ManualMsPerGameMinute == nil then Config.ManualMsPerGameMinute = 2000 end
 -- ===============================================================
 
@@ -25,6 +25,10 @@ local isTransitioning = false
 -- Manual mode interpolation state
 local manualBase = { h = nil, m = nil, s = nil, t0 = nil } -- base game time + client ms epoch
 local manualLoopStarted = false
+
+-- One-time hard commit flag for manual mode
+local needsFirstManualHardCommit = true
+local manualMsPerGameMinute = Config.ManualMsPerGameMinute -- authoritative rate may come from server
 
 -- Ease function
 local function easeInOutQuad(t)
@@ -121,6 +125,8 @@ RegisterNetEvent("realtimeclock:setRealtime", function(enable, hour, minute)
     if enable then
         -- entering realtime
         manualBase = { h = nil, m = nil, s = nil, t0 = nil } -- clear manual state
+        needsFirstManualHardCommit = true -- next time we go to manual, do one hard commit
+
         if not realtimeMode then
             SmoothSetTime(hour, minute, Config.TransitionLength)
             Wait(Config.DelayUntilMessage)
@@ -153,22 +159,32 @@ RegisterNetEvent("realtimeclock:setRealtime", function(enable, hour, minute)
             end
         end)
     else
-        -- leaving realtime
+        -- leaving realtime -> ensure next manual tick hard-commits once
         realtimeMode = false
         if realtimeThread then TerminateThread(realtimeThread); realtimeThread = nil end
+        needsFirstManualHardCommit = true
         -- manual loop will take over once we receive forceTime ticks
     end
 end)
 
--- Manual mode server tick: set base epoch; no snap
-RegisterNetEvent("realtimeclock:forceTime", function(hour, minute, second)
+-- Manual mode server tick: set base epoch; do a ONE-TIME HARD commit on first tick
+RegisterNetEvent("realtimeclock:forceTime", function(hour, minute, second, msPerMin)
     if realtimeMode then return end
+
+    -- Take authoritative rate if provided
+    if msPerMin and msPerMin > 0 then
+        manualMsPerGameMinute = msPerMin
+    end
+
     manualBase.h, manualBase.m, manualBase.s = hour, minute, (second or 0)
     manualBase.t0 = GetGameTimer()
 
-    -- Do a single HARD apply on the first tick after switching into manual
-    if not manualLoopStarted then
+    if needsFirstManualHardCommit then
         ApplyClockHard(hour, minute, manualBase.s)
+        needsFirstManualHardCommit = false
+    else
+        -- already aligned once; keep it smooth
+        ApplyClockSoft(hour, minute, manualBase.s)
     end
 end)
 
@@ -180,6 +196,8 @@ RegisterNetEvent("realtimeclock:updateTime", function(hour, minute)
     SmoothSetTime(hour, minute, Config.TransitionLength)
     Wait(Config.DelayUntilMessage)
     NotifyRandom()
+    -- Ensure after the admin set, we don't accidentally skip a hard commit if server stays in manual
+    needsFirstManualHardCommit = false
 end)
 
 -- Timelapse handler (SOFT during the motion; HARD once at the end)
@@ -223,11 +241,14 @@ TriggerEvent('chat:addSuggestion', '/timelapse', 'Run a cinematic time-lapse', {
 -- Manual mode interpolation loop (keeps sun smooth between server ticks)
 CreateThread(function()
     manualLoopStarted = true
+    -- On resource start / first join, ensure we will do a hard commit
+    needsFirstManualHardCommit = true
+
     while true do
         Wait(250)
         if not realtimeMode and manualBase.t0 then
             local elapsedMs = GetGameTimer() - manualBase.t0
-            local addMinutes = elapsedMs / Config.ManualMsPerGameMinute
+            local addMinutes = elapsedMs / manualMsPerGameMinute -- authoritative rate
             local baseTotal = manualBase.h * 60 + manualBase.m + (manualBase.s or 0) / 60
             local cur = (baseTotal + addMinutes) % (24 * 60)
             local h = math.floor(cur / 60)

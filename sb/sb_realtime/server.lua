@@ -26,6 +26,14 @@ local function DebugPrint(msg)
     if Config.Debug then print("^3[RealtimeDebug]^7 " .. msg) end
 end
 
+-- === Helper: broadcast current manual time (+ authoritative rate) to a target or all
+local function broadcastManualTime(target)
+    local h = math.floor(manualBaseMinutes / 60)
+    local m = manualBaseMinutes % 60
+    local s = math.floor((accumulatedMs / Config.ManualMsPerGameMinute) * 60)
+    TriggerClientEvent("realtimeclock:forceTime", target or -1, h, m, s, Config.ManualMsPerGameMinute)
+end
+
 -- Forward declarations
 local startManualClockLoop
 local setManualTime
@@ -34,8 +42,7 @@ local setManualTime
 setManualTime = function(h, m)
     manualBaseMinutes = ((h or 0) * 60 + (m or 0)) % (24 * 60)
     accumulatedMs = 0
-    local s = 0
-    TriggerClientEvent("realtimeclock:forceTime", -1, h or 0, m or 0, s)
+    broadcastManualTime(-1) -- push immediately so everyone aligns now
 end
 
 startManualClockLoop = function()
@@ -60,10 +67,7 @@ startManualClockLoop = function()
             nextBroadcast = nextBroadcast + dt
             if nextBroadcast >= Config.ManualBroadcastInterval then
                 nextBroadcast = 0
-                local h = math.floor(manualBaseMinutes / 60)
-                local m = manualBaseMinutes % 60
-                local s = math.floor((accumulatedMs / Config.ManualMsPerGameMinute) * 60)
-                TriggerClientEvent("realtimeclock:forceTime", -1, h, m, s)
+                broadcastManualTime(-1)
             end
 
             if realtimeEnabled then break end
@@ -77,11 +81,11 @@ AddEventHandler('playerJoining', function(_oldId)
     local playerId = source
     if realtimeEnabled then
         local t = os.date("*t")
+        -- realtime path (H/M only is fine for your current client)
         TriggerClientEvent("realtimeclock:setRealtime", playerId, true, t.hour, t.min)
     else
-        local h = math.floor(manualBaseMinutes / 60)
-        local m = manualBaseMinutes % 60
-        TriggerClientEvent("realtimeclock:forceTime", playerId, h, m, 0)
+        -- manual path: push H/M/S + authoritative rate, so client can hard-commit once
+        broadcastManualTime(playerId)
     end
 end)
 
@@ -118,8 +122,10 @@ RegisterCommand("realtime", function(source, args)
         realtimeEnabled = false
         GlobalState.realtimeEnabled = false
         TriggerClientEvent("realtimeclock:setRealtime", -1, false)
+        -- start manual, and immediately broadcast current manual moment so clients hard-commit once
         startManualClockLoop()
-        DebugPrint("Realtime disabled; manual loop started.")
+        broadcastManualTime(-1)
+        DebugPrint("Realtime disabled; manual loop started and manual time broadcast.")
     end
 end, true)
 
@@ -136,7 +142,7 @@ RegisterCommand("settime", function(source, args)
 
     SetTimeout(200, function()
         TriggerClientEvent("realtimeclock:updateTime", -1, h, m)
-        setManualTime(h, m)
+        setManualTime(h, m)  -- this also broadcasts the first manual tick
         startManualClockLoop()
         DebugPrint(("Manual time set to %02d:%02d; loop running."):format(h, m))
     end)

@@ -42,4 +42,4 @@ Config.ManualMsPerGameMinute = 2000
 Config.ManualBroadcastInterval = 2000  -- ms (2s is plenty to keep clients in lockstep)
 
 -- ==== Debug ====
-Config.Debug = false
+Config.Debug = true

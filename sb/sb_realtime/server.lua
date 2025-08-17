@@ -160,3 +160,15 @@ RegisterCommand("timelapse", function(source, args)
     TriggerClientEvent("realtimeclock:startTimelapse", -1, hours, minutes, duration)
     DebugPrint(("Timelapse: +%dh %dm over %ds"):format(hours, minutes, duration))
 end, true)
+
+
+-- Client requested a hard push (e.g., resource started client-side after join)
+RegisterNetEvent('realtimeclock:requestHardPush', function()
+    local src = source
+    if realtimeEnabled then
+        local t = os.date("*t")
+        TriggerClientEvent("realtimeclock:setRealtime", src, true, t.hour, t.min)
+    else
+        broadcastManualTime(src)
+    end
+end)
